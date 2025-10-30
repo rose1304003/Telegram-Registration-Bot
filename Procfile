@@ -1,1 +1,1 @@
-worker: python sayyor_qabul_bot.py
+worker: python event.py

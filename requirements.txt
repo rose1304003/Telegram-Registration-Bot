@@ -1,6 +1,4 @@
 python-telegram-bot==20.7
-# Optional if you use .env files locally
-python-dotenv==1.0.1
-# Optional: Google Sheets integration (uncomment in code to use)
-gspread==5.12.4
-google-auth==2.29.0
+gspread
+google-auth
+python-dotenv

@@ -207,7 +207,6 @@ def save_row(row: Dict[str, Any]):
         writer.writerow(row)
 
 # Optional Google Sheets (uncomment to enable)
-"""
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -226,7 +225,6 @@ def gs_save_row(sheet_name: str, row: Dict[str, Any]):
         row["timestamp"], row["lang"], row["user_id"], row["full_name"], row["dob"],
         row["region"], row["district"], row["mode"], row["phone"], row["content"],
     ])
-"""
 
 # ===== Handlers =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):

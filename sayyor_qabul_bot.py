@@ -141,7 +141,7 @@ REGIONS_RU = [
 # ===== Texts =====
 WELCOME_PREVIEW_UZ = (
     "Assalomu alaykum!\n\n"
-    "Markaziy bank raisi Timur Aminjonovich Ishmetov bilan o'tkaziladigan «Ochiq muloqot» platformasiga xush kelibsiz!\n"
+    "Markaziy bank xodimlari bilan o'tkaziladigan «Ochiq muloqot» platformasiga xush kelibsiz!\n"
     "Sizning fikr va takliflaringiz — moliyaviy xizmatlarni yanada qulay va samarali qilishda muhim.\n"
     "Iltimos, quyidagi qadamlarni bosqichma-bosqich bajaring."
 )

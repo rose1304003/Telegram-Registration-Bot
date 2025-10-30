@@ -1,45 +1,86 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Sayyor Qabul / "Открытый диалог" registration bot
-Language: Uzbek (Latin) + Russian
-Library: python-telegram-bot >= 20.7
-Storage: CSV by default; optional Google Sheets (gspread) snippet included
+Ochiq muloqat / "Открытый диалог" registration bot
+- Uzbek (Latin) + Russian
+- CSV storage
+- Optional Google Sheets
+- Admin DMs for every submission
+- /whoami to get your Telegram ID
 
-Flow
-- /start → language (UZ/RU)
-- region (14 incl. Tashkent City)
-- attendance (offline/online)
-- full name
-- date of birth
-- district (tuman)
-- phone (Telegram one‑tap, with fallback validation)
-- appeal text (Murojaat mazmuni)
-- confirmation → save → thank you
+Env (Railway → Variables):
+TELEGRAM_TOKEN=123:ABC
+ADMIN_IDS=111111111,222222222
+CSV_PATH=registrations.csv
 
-Environment variables:
-TELEGRAM_TOKEN="123456:ABC..."                # required
-# Optional Google Sheets:
-# GOOGLE_SHEETS_JSON="/path/to/service_account.json"
-# GOOGLE_SHEETS_NAME="SayyorQabul"
-
-Run:
-    python -m venv .venv
-    # Windows: .venv\Scripts\activate
-    # macOS/Linux:
-    #   source .venv/bin/activate
-    pip install python-telegram-bot==20.7
-    export TELEGRAM_TOKEN="123:ABC"  # (Windows PowerShell: $env:TELEGRAM_TOKEN="123:ABC")
-    python sayyor_qabul_bot.py
-
-Note: Telegram does NOT allow sending a message before the user taps Start.
-Place the pre-start welcome text in the bot's Description and Short Description.
+# Optional Sheets (either use *_JSON or *_JSON_CONTENT)
+GOOGLE_SHEETS_NAME=Ochiq Muloqat/MB
+GOOGLE_SHEETS_JSON=/abs/path/to/service_account.json
+# or:
+GOOGLE_SHEETS_JSON_CONTENT={...full json...}
 """
 import os
 import re
 import csv
+import tempfile
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, List
+
+# ---------- Optional dotenv for local testing ----------
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
+# ---------- If JSON content provided (Railway-friendly), write it to temp file ----------
+json_env = os.getenv("GOOGLE_SHEETS_JSON_CONTENT")
+if json_env and not os.getenv("GOOGLE_SHEETS_JSON"):
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
+    tmp.write(json_env.encode("utf-8"))
+    tmp.flush()
+    os.environ["GOOGLE_SHEETS_JSON"] = tmp.name
+
+# ---------- Google Sheets helper (safe, will not crash bot) ----------
+def try_gs_save_row(sheet_name: str, row: Dict[str, Any]) -> str:
+    """Append to Google Sheet if creds exist. Returns '' on success, error text on failure."""
+    try:
+        gs_path = os.environ.get("GOOGLE_SHEETS_JSON")
+        if not gs_path:
+            return "GOOGLE_SHEETS_JSON not set"
+        import gspread
+        from google.oauth2.service_account import Credentials
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        creds = Credentials.from_service_account_file(gs_path, scopes=scopes)
+        gc = gspread.authorize(creds)
+        sh = gc.open(os.environ.get("GOOGLE_SHEETS_NAME", sheet_name))
+        ws = sh.sheet1
+        ws.append_row([
+            row["timestamp"], row["lang"], row["user_id"], row["full_name"], row["dob"],
+            row["region"], row["district"], row["mode"], row["phone"], row["content"],
+        ])
+        return ""
+    except Exception as e:
+        return str(e)
+
+def parse_admin_ids(raw: str | None) -> List[int]:
+    if not raw:
+        return []
+    out: List[int] = []
+    for p in raw.split(","):
+        p = p.strip()
+        if not p:
+            continue
+        try:
+            out.append(int(p))
+        except ValueError:
+            pass
+    return out
+
+ADMIN_IDS: List[int] = parse_admin_ids(os.getenv("ADMIN_IDS"))
 
 from telegram import (
     Update,
@@ -115,7 +156,6 @@ LANG_BTNS = [
     [InlineKeyboardButton("O'zbekcha 🇺🇿", callback_data="lang_uz")],
     [InlineKeyboardButton("Русский 🇷🇺", callback_data="lang_ru")],
 ]
-
 PROMPTS = {
     "uz": {
         "region": "Iltimos, yashash hududingizni tanlang:",
@@ -148,10 +188,9 @@ PROMPTS = {
         "thanks": "Спасибо! Обращение принято. Мы свяжемся с вами в ближайшее время.",
     },
 }
-
 CSV_PATH = os.environ.get("CSV_PATH", "registrations.csv")
 
-# ===== Keyboards =====
+# ----- Keyboards -----
 def build_regions_keyboard(lang: str) -> InlineKeyboardMarkup:
     names = REGIONS if lang == "uz" else REGIONS_RU
     rows = [[InlineKeyboardButton(name, callback_data=f"reg|{name}")] for name in names]
@@ -171,9 +210,8 @@ def build_confirm_keyboard(lang: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t["no"], callback_data="confirm|no")],
     ])
 
-# ===== Utils =====
+# ----- Utils -----
 def parse_dob(text: str) -> str:
-    """Accepts dd.mm.yyyy (or with / or -) and returns formatted 'dd.mm.yyyy' or '' if invalid."""
     m = re.fullmatch(r"\s*(\d{1,2})[./-](\d{1,2})[./-](\d{4})\s*", text or "")
     if not m:
         return ""
@@ -190,41 +228,32 @@ def save_row(row: Dict[str, Any]):
         writer = csv.DictWriter(
             f,
             fieldnames=[
-                "timestamp",
-                "lang",
-                "user_id",
-                "full_name",
-                "dob",
-                "region",
-                "district",
-                "mode",
-                "phone",
-                "content",
+                "timestamp","lang","user_id","full_name","dob",
+                "region","district","mode","phone","content",
             ],
         )
         if not file_exists:
             writer.writeheader()
         writer.writerow(row)
 
-# Optional Google Sheets (uncomment to enable)
-import gspread
-from google.oauth2.service_account import Credentials
-
-def gs_save_row(sheet_name: str, row: Dict[str, Any]):
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    creds = Credentials.from_service_account_file(
-        os.environ["GOOGLE_SHEETS_JSON"], scopes=scopes
+def format_summary(lang: str, ud: Dict[str, Any]) -> str:
+    return (
+        f"\n— Til/Язык: {'O‘zbekcha' if lang=='uz' else 'Русский'}"
+        f"\n— Hudud/Регион: {ud.get('region')}"
+        f"\n— Shakl/Формат: {('Offline' if ud.get('mode')=='offline' else 'Online')}"
+        f"\n— F.I.Sh/Ф.И.О.: {ud.get('full_name')}"
+        f"\n— Tug'ilgan sana/Дата рождения: {ud.get('dob')}"
+        f"\n— Tuman/Rayon: {ud.get('district')}"
+        f"\n— Telefon/Телефон: {ud.get('phone')}"
+        f"\n— Murojaat/Обращение: {ud.get('content')}\n"
     )
-    gc = gspread.authorize(creds)
-    sh = gc.open(os.environ.get("GOOGLE_SHEETS_NAME", sheet_name))
-    ws = sh.sheet1
-    ws.append_row([
-        row["timestamp"], row["lang"], row["user_id"], row["full_name"], row["dob"],
-        row["region"], row["district"], row["mode"], row["phone"], row["content"],
-    ])
+
+async def notify_admins(context: ContextTypes.DEFAULT_TYPE, text: str):
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=text)
+        except Exception:
+            pass  # ignore individual DM errors
 
 # ===== Handlers =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -297,14 +326,12 @@ async def contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         txt = (update.message.text or "").strip()
         if re.fullmatch(r"[+]?[\d][\d\s-]{6,}", txt):
             phone = txt
-
     if not phone:
         await update.message.reply_text(
             "Iltimos, tugma orqali yuboring yoki +998… formatida yozing." if lang == "uz" else
             "Пожалуйста, отправьте через кнопку или в формате +998…"
         )
         return CONTACT
-
     context.user_data["phone"] = phone
     await update.message.reply_text(PROMPTS[lang]["content"], reply_markup=ReplyKeyboardRemove())
     return CONTENT
@@ -312,18 +339,9 @@ async def contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def content(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["content"] = (update.message.text or "").strip()
     lang = context.user_data.get("lang", "uz")
-    ud = context.user_data
-    summary = (
-        f"\n— Til/Язык: {'O‘zbekcha' if lang=='uz' else 'Русский'}"
-        f"\n— Hudud/Регион: {ud.get('region')}"
-        f"\n— Shakl/Формат: {('Offline' if ud.get('mode')=='offline' else 'Online')}"
-        f"\n— F.I.Sh/Ф.И.О.: {ud.get('full_name')}"
-        f"\n— Tug'ilgan sana/Дата рождения: {ud.get('dob')}"
-        f"\n— Tuman/Rayon: {ud.get('district')}"
-        f"\n— Telefon/Телефон: {ud.get('phone')}"
-        f"\n— Murojaat/Обращение: {ud.get('content')}\n"
-    )
-    await update.message.reply_text(PROMPTS[lang]["confirm"] + "\n" + summary, reply_markup=build_confirm_keyboard(lang))
+    summary = format_summary(lang, context.user_data)
+    await update.message.reply_text(PROMPTS[lang]["confirm"] + "\n" + summary,
+                                    reply_markup=build_confirm_keyboard(lang))
     return CONFIRM
 
 async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -348,23 +366,36 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "phone": ud.get("phone"),
         "content": ud.get("content"),
     }
+
+    # Save to CSV
     save_row(row)
-    # Optional: also save to Google Sheets
-    # gs_save_row(os.environ.get("GOOGLE_SHEETS_NAME", "SayyorQabul"), row)
+
+    # Try Google Sheets (will not crash on error)
+    gs_err = try_gs_save_row(os.environ.get("GOOGLE_SHEETS_NAME", "SayyorQabul"), row)
+
+    # Notify admins regardless of Sheets result
+    note = "✅ Yangi ro‘yxatdan o‘tish:" if lang == "uz" else "✅ Новая регистрация:"
+    extra = f"\n⚠️ Sheets: {gs_err}" if gs_err else ""
+    await notify_admins(context, note + format_summary(lang, ud) + extra)
 
     await q.edit_message_text(PROMPTS[lang]["thanks"])
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = context.user_data.get("lang", "uz")
-    await update.message.reply_text("Bekor qilindi." if lang == "uz" else "Отменено.", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text("Bekor qilindi." if lang == "uz" else "Отменено.",
+                                    reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
+
+async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"Sizning user ID: {update.effective_user.id}")
 
 # ===== Main =====
 async def post_init(app: Application):
     await app.bot.set_my_commands([
         ("start", "Boshlash / Старт"),
         ("cancel", "Bekor qilish / Отмена"),
+        ("whoami", "User ID ni ko‘rish"),
     ])
 
 def main():
@@ -395,6 +426,7 @@ def main():
     )
 
     app.add_handler(conv)
+    app.add_handler(CommandHandler("whoami", whoami))
     app.run_polling(close_loop=False)
 
 if __name__ == "__main__":

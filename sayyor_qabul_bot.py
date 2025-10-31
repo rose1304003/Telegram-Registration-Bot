@@ -2,6 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 Ochiq muloqat / "Открытый диалог" registration bot (PTB >= 20.7)
+
+Features
+- Uzbek (Latin) + Russian flow
+- CSV storage (always)
+- Optional Google Sheets append (if creds provided)
+- Admin DMs for every submission
+- /whoami to show user ID
 """
 
 import os
@@ -123,7 +130,7 @@ WELCOME_PREVIEW_UZ = (
 )
 WELCOME_PREVIEW_RU = (
     "Ассалому алайкум!\n"
-    "Добро пожаловать на платформу «Открытый диалог» с Председателем Центробанка Тимуром Аминжоновичем Ишметовым!\n"
+    "Добро пожаловать на платформу «Открытый диалог», проводимую с участием сотрудников Центрального банка!\n"
     "Ваши мнения и предложения важны для того, чтобы сделать финансовые услуги ещё удобнее и эффективнее.\n"
     "Пожалуйста, выполните шаги ниже по порядку."
 )
@@ -146,7 +153,8 @@ PROMPTS = {
         "confirm": "Ma'lumotlaringizni tasdiqlaysizmi?",
         "yes": "Ha, tasdiqlayman",
         "no": "Yo'q, tahrirlayman",
-        "thanks": "Hurmatli fuqaro, murojaatingiz qabul qilindi. Tez orada bog'lanamiz.",
+        "thanks": "Hurmatli fuqaro, murojaat qilganingiz uchun katta rahmat. "
+                  "Murojaatda siz ilgari surgan taklif va tavsiyalar biz uchun nihoyatda muhimdir.",
     },
     "ru": {
         "region": "Пожалуйста, выберите ваш регион проживания:",
@@ -161,7 +169,8 @@ PROMPTS = {
         "confirm": "Подтвердить ваши данные?",
         "yes": "Да, подтверждаю",
         "no": "Изменить",
-        "thanks": "Спасибо! Обращение принято. Мы свяжемся с вами в ближайшее время.",
+        "thanks": "Уважаемый(ая) гражданин(ка), большое спасибо за ваше обращение. "
+                  "Ваши предложения и рекомендации для нас чрезвычайно важны.",
     },
 }
 
@@ -346,9 +355,13 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "content": ud.get("content"),
     }
 
+    # Save CSV
     save_row(row)
+
+    # Try Sheets (non-fatal)
     gs_err = try_gs_save_row(os.environ.get("GOOGLE_SHEETS_NAME", "SayyorQabul"), row)
 
+    # Notify admins
     note = "✅ Yangi ro‘yxatdan o‘tish:" if lang == "uz" else "✅ Новая регистрация:"
     extra = f"\n⚠️ Sheets: {gs_err}" if gs_err else ""
     await notify_admins(context, note + format_summary(lang, ud) + extra)
@@ -371,7 +384,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 # ===== Main =====
 async def post_init(app: Application):
-    # helpful banner to confirm we are on PTB 20.x and correct Python
     import telegram, sys
     log.info("PTB VERSION: %s | PYTHON: %s", getattr(telegram, "__version__", "unknown"), sys.version)
     await app.bot.set_my_commands([

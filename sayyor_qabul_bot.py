@@ -2,13 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Ochiq muloqat / "Открытый диалог" registration bot (PTB >= 20.7)
-
-Features
-- Uzbek (Latin) + Russian flow
-- CSV storage (always)
-- Optional Google Sheets append (if creds provided)
-- Admin DMs for every submission
-- /whoami to show user ID
+Adds: Appeal Type (Murojaat turi / Тип обращения) before appeal text.
 """
 
 import os
@@ -61,7 +55,9 @@ def try_gs_save_row(sheet_name: str, row: Dict[str, Any]) -> str:
         ws = sh.sheet1
         ws.append_row([
             row["timestamp"], row["lang"], row["user_id"], row["full_name"], row["dob"],
-            row["region"], row["district"], row["mode"], row["phone"], row["content"],
+            row["region"], row["district"], row["mode"], row["phone"],
+            row["appeal_type"],  # NEW
+            row["content"],
         ])
         return ""
     except Exception as e:
@@ -103,7 +99,8 @@ from telegram.ext import (
 )
 
 # ===== States =====
-LANG, REGION, MODE, NAME, DOB, DISTRICT, CONTACT, CONTENT, CONFIRM = range(9)
+LANG, REGION, MODE, NAME, DOB, DISTRICT, CONTACT, ATYPE, CONTENT, CONFIRM = range(10)
+#                                ^ NEW state inserted before CONTENT
 
 # ===== Regions (Uz/Ru) =====
 REGIONS = [
@@ -120,6 +117,30 @@ REGIONS_RU = [
     "Сурхандарьинская область", "Ташкентская область", "Город Ташкент",
     "Ферганская область", "Хорезмская область",
 ]
+
+# ===== Appeal Types (Uz/Ru) =====
+APPEAL_TYPES = {
+    "uz": [
+        "Kredit xizmatlari",
+        "Firibgarlik bo‘yicha",
+        "Biznes ko‘mak",
+        "Xizmat sifati",
+        "Raqamli xizmatlar",
+        "Ijtimoiy himoya",
+        "Ishga joylashish",
+        "Boshqa",
+    ],
+    "ru": [
+        "Кредитование",
+        "Мошенничество",
+        "Бизнес-поддержка",
+        "Качество услуг",
+        "Цифровые сервисы",
+        "Социальная защита",
+        "Трудоустройство",
+        "Другое",
+    ],
+}
 
 # ===== Texts =====
 WELCOME_PREVIEW_UZ = (
@@ -149,12 +170,15 @@ PROMPTS = {
         "dob": "Tug'ilgan sanangiz (dd.mm.yyyy, masalan 07.09.1999):",
         "district": "Yashash tumani/shahri:",
         "contact": "Telefon raqamingizni yuboring (tugma orqali):",
+        "atype": "Murojaatingiz turini tanlang:",
         "content": "Murojaat mazmuni (qisqacha va aniq):",
         "confirm": "Ma'lumotlaringizni tasdiqlaysizmi?",
         "yes": "Ha, tasdiqlayman",
         "no": "Yo'q, tahrirlayman",
-        "thanks": "Hurmatli fuqaro, murojaat qilganingiz uchun katta rahmat. "
-                  "Murojaatda siz ilgari surgan taklif va tavsiyalar biz uchun nihoyatda muhimdir.",
+        "thanks": (
+            "Hurmatli fuqaro, murojaat qilganingiz uchun katta rahmat. "
+            "Murojaatda siz ilgari surgan taklif va tavsiyalar biz uchun nihoyatda muhimdir."
+        ),
     },
     "ru": {
         "region": "Пожалуйста, выберите ваш регион проживания:",
@@ -165,12 +189,15 @@ PROMPTS = {
         "dob": "Дата рождения (дд.мм.гггг, например 07.09.1999):",
         "district": "Район/город проживания:",
         "contact": "Отправьте ваш номер телефона (через кнопку):",
-        "content": "Содержание обращения (кратко и конкретно):",
+        "atype": "Выберите тип вашего обращения:",
+        "content": "Кратко опишите суть обращения:",
         "confirm": "Подтвердить ваши данные?",
         "yes": "Да, подтверждаю",
         "no": "Изменить",
-        "thanks": "Уважаемый(ая) гражданин(ка), большое спасибо за ваше обращение. "
-                  "Ваши предложения и рекомендации для нас чрезвычайно важны.",
+        "thanks": (
+            "Уважаемый(ая) заявитель, благодарим вас за обращение. "
+            "Предложенные вами идеи и рекомендации крайне важны для нас."
+        ),
     },
 }
 
@@ -188,6 +215,15 @@ def build_mode_keyboard(lang: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t["mode_off"], callback_data="mode|offline")],
         [InlineKeyboardButton(t["mode_on"], callback_data="mode|online")],
     ])
+
+def build_types_keyboard(lang: str) -> InlineKeyboardMarkup:
+    items = APPEAL_TYPES[lang]
+    # arrange in two columns for readability
+    rows = []
+    for i in range(0, len(items), 2):
+        pair = items[i:i+2]
+        rows.append([InlineKeyboardButton(x, callback_data=f"atype|{x}") for x in pair])
+    return InlineKeyboardMarkup(rows)
 
 def build_confirm_keyboard(lang: str) -> InlineKeyboardMarkup:
     t = PROMPTS[lang]
@@ -215,7 +251,9 @@ def save_row(row: Dict[str, Any]):
             f,
             fieldnames=[
                 "timestamp","lang","user_id","full_name","dob",
-                "region","district","mode","phone","content",
+                "region","district","mode","phone",
+                "appeal_type",            # NEW column
+                "content",
             ],
         )
         if not file_exists:
@@ -231,6 +269,7 @@ def format_summary(lang: str, ud: Dict[str, Any]) -> str:
         f"\n— Tug'ilgan sana/Дата рождения: {ud.get('dob')}"
         f"\n— Tuman/Rayon: {ud.get('district')}"
         f"\n— Telefon/Телефон: {ud.get('phone')}"
+        f"\n— Murojaat turi/Тип обращения: {ud.get('appeal_type')}"
         f"\n— Murojaat/Обращение: {ud.get('content')}\n"
     )
 
@@ -243,7 +282,7 @@ async def notify_admins(context: ContextTypes.DEFAULT_TYPE, text: str):
 
 # ===== Handlers =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:  # guard if someone taps old inline message
+    if not update.message:
         return LANG
     text = f"{WELCOME_PREVIEW_UZ}\n\n{WELCOME_PREVIEW_RU}\n\n{CHOOSE_LANG}"
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(LANG_BTNS))
@@ -321,7 +360,17 @@ async def contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return CONTACT
     context.user_data["phone"] = phone
-    await update.message.reply_text(PROMPTS[lang]["content"], reply_markup=ReplyKeyboardRemove())
+    # NEW: ask for appeal type now
+    await update.message.reply_text(PROMPTS[lang]["atype"], reply_markup=build_types_keyboard(lang))
+    return ATYPE
+
+async def choose_atype(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    _, atype = q.data.split("|", 1)
+    context.user_data["appeal_type"] = atype
+    lang = context.user_data.get("lang", "uz")
+    await q.edit_message_text(PROMPTS[lang]["content"])
     return CONTENT
 
 async def content(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -352,16 +401,13 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "district": ud.get("district"),
         "mode": ud.get("mode"),
         "phone": ud.get("phone"),
+        "appeal_type": ud.get("appeal_type"),  # NEW
         "content": ud.get("content"),
     }
 
-    # Save CSV
     save_row(row)
-
-    # Try Sheets (non-fatal)
     gs_err = try_gs_save_row(os.environ.get("GOOGLE_SHEETS_NAME", "SayyorQabul"), row)
 
-    # Notify admins
     note = "✅ Yangi ro‘yxatdan o‘tish:" if lang == "uz" else "✅ Новая регистрация:"
     extra = f"\n⚠️ Sheets: {gs_err}" if gs_err else ""
     await notify_admins(context, note + format_summary(lang, ud) + extra)
@@ -412,6 +458,7 @@ def main():
                 MessageHandler(filters.CONTACT, contact),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, contact),
             ],
+            ATYPE: [CallbackQueryHandler(choose_atype, pattern=r"^atype\|")],  # NEW
             CONTENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, content)],
             CONFIRM: [CallbackQueryHandler(confirm, pattern=r"^confirm\|")],
         },

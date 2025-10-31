@@ -1,30 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Ochiq muloqat / "Открытый диалог" registration bot
-- Uzbek (Latin) + Russian
-- CSV storage
-- Optional Google Sheets
-- Admin DMs for every submission
-- /whoami to get your Telegram ID
-
-Env (Railway → Variables):
-TELEGRAM_TOKEN=123:ABC
-ADMIN_IDS=111111111,222222222
-CSV_PATH=registrations.csv
-
-# Optional Sheets (either use *_JSON or *_JSON_CONTENT)
-GOOGLE_SHEETS_NAME=Ochiq Muloqat/MB
-GOOGLE_SHEETS_JSON=/abs/path/to/service_account.json
-# or:
-GOOGLE_SHEETS_JSON_CONTENT={...full json...}
+Ochiq muloqat / "Открытый диалог" registration bot (PTB >= 20.7)
 """
+
 import os
 import re
 import csv
 import tempfile
+import logging
 from datetime import datetime
 from typing import Dict, Any, List
+
+# ---------- logging ----------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+log = logging.getLogger("sayyor")
 
 # ---------- Optional dotenv for local testing ----------
 try:
@@ -40,6 +33,7 @@ if json_env and not os.getenv("GOOGLE_SHEETS_JSON"):
     tmp.write(json_env.encode("utf-8"))
     tmp.flush()
     os.environ["GOOGLE_SHEETS_JSON"] = tmp.name
+    log.info("Wrote GOOGLE_SHEETS_JSON to temp file: %s", tmp.name)
 
 # ---------- Google Sheets helper (safe, will not crash bot) ----------
 def try_gs_save_row(sheet_name: str, row: Dict[str, Any]) -> str:
@@ -106,36 +100,18 @@ LANG, REGION, MODE, NAME, DOB, DISTRICT, CONTACT, CONTENT, CONFIRM = range(9)
 
 # ===== Regions (Uz/Ru) =====
 REGIONS = [
-    "Qoraqalpog'iston Respublikasi",
-    "Andijon viloyati",
-    "Buxoro viloyati",
-    "Jizzax viloyati",
-    "Qashqadaryo viloyati",
-    "Navoiy viloyati",
-    "Namangan viloyati",
-    "Samarqand viloyati",
-    "Sirdaryo viloyati",
-    "Surxondaryo viloyati",
-    "Toshkent viloyati",
-    "Toshkent shahar",
-    "Farg'ona viloyati",
-    "Xorazm viloyati",
+    "Qoraqalpog'iston Respublikasi", "Andijon viloyati", "Buxoro viloyati",
+    "Jizzax viloyati", "Qashqadaryo viloyati", "Navoiy viloyati",
+    "Namangan viloyati", "Samarqand viloyati", "Sirdaryo viloyati",
+    "Surxondaryo viloyati", "Toshkent viloyati", "Toshkent shahar",
+    "Farg'ona viloyati", "Xorazm viloyati",
 ]
 REGIONS_RU = [
-    "Республика Каракалпакстан",
-    "Андижанская область",
-    "Бухарская область",
-    "Джизакская область",
-    "Кашкадарьинская область",
-    "Навоийская область",
-    "Наманганская область",
-    "Самаркандская область",
-    "Сырдарьинская область",
-    "Сурхандарьинская область",
-    "Ташкентская область",
-    "Город Ташкент",
-    "Ферганская область",
-    "Хорезмская область",
+    "Республика Каракалпакстан", "Андижанская область", "Бухарская область",
+    "Джизакская область", "Кашкадарьинская область", "Навоийская область",
+    "Наманганская область", "Самаркандская область", "Сырдарьинская область",
+    "Сурхандарьинская область", "Ташкентская область", "Город Ташкент",
+    "Ферганская область", "Хорезмская область",
 ]
 
 # ===== Texts =====
@@ -188,6 +164,7 @@ PROMPTS = {
         "thanks": "Спасибо! Обращение принято. Мы свяжемся с вами в ближайшее время.",
     },
 }
+
 CSV_PATH = os.environ.get("CSV_PATH", "registrations.csv")
 
 # ----- Keyboards -----
@@ -252,11 +229,13 @@ async def notify_admins(context: ContextTypes.DEFAULT_TYPE, text: str):
     for admin_id in ADMIN_IDS:
         try:
             await context.bot.send_message(chat_id=admin_id, text=text)
-        except Exception:
-            pass  # ignore individual DM errors
+        except Exception as e:
+            log.warning("Admin DM failed for %s: %s", admin_id, e)
 
 # ===== Handlers =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:  # guard if someone taps old inline message
+        return LANG
     text = f"{WELCOME_PREVIEW_UZ}\n\n{WELCOME_PREVIEW_RU}\n\n{CHOOSE_LANG}"
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(LANG_BTNS))
     return LANG
@@ -367,13 +346,9 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "content": ud.get("content"),
     }
 
-    # Save to CSV
     save_row(row)
-
-    # Try Google Sheets (will not crash on error)
     gs_err = try_gs_save_row(os.environ.get("GOOGLE_SHEETS_NAME", "SayyorQabul"), row)
 
-    # Notify admins regardless of Sheets result
     note = "✅ Yangi ro‘yxatdan o‘tish:" if lang == "uz" else "✅ Новая регистрация:"
     extra = f"\n⚠️ Sheets: {gs_err}" if gs_err else ""
     await notify_admins(context, note + format_summary(lang, ud) + extra)
@@ -390,8 +365,15 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Sizning user ID: {update.effective_user.id}")
 
+# ---- error handler (helps debugging) ----
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    log.error("Exception while handling update: %s", context.error)
+
 # ===== Main =====
 async def post_init(app: Application):
+    # helpful banner to confirm we are on PTB 20.x and correct Python
+    import telegram, sys
+    log.info("PTB VERSION: %s | PYTHON: %s", getattr(telegram, "__version__", "unknown"), sys.version)
     await app.bot.set_my_commands([
         ("start", "Boshlash / Старт"),
         ("cancel", "Bekor qilish / Отмена"),
@@ -427,6 +409,8 @@ def main():
 
     app.add_handler(conv)
     app.add_handler(CommandHandler("whoami", whoami))
+    app.add_error_handler(error_handler)
+
     app.run_polling(close_loop=False)
 
 if __name__ == "__main__":

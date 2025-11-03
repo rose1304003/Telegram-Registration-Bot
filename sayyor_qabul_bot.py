@@ -148,6 +148,7 @@ WELCOME_PREVIEW_UZ = (
     "Markaziy bank xodimlari bilan o'tkaziladigan «Ochiq muloqot» platformasiga xush kelibsiz!\n"
     "Sizning fikr va takliflaringiz — moliyaviy xizmatlarni yanada qulay va samarali qilishda muhim.\n"
     "Iltimos, quyidagi qadamlarni bosqichma-bosqich bajaring."
+    "Murojaatingizni to‘liq qoldiring."
 )
 WELCOME_PREVIEW_RU = (
     "Ассалому алайкум!\n"
